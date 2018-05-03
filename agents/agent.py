@@ -5,7 +5,6 @@ import copy
 import random
 from collections import namedtuple, deque
 
-
 class DDPG_Agent():
     """Reinforcement Learning agent that learns using DDPG."""
     def __init__(self, task):
@@ -33,46 +32,62 @@ class DDPG_Agent():
         self.exploration_theta = 0.15
         self.exploration_sigma = 0.2
         self.noise = DDPG_OUNoise(self.action_size, self.exploration_mu, self.exploration_theta, self.exploration_sigma)
-
+        self.dynamic_noise = False
+        
         # Replay memory
         self.buffer_size = 100000
-        self.batch_size = 1
+        self.batch_size = 64
         self.memory = DDPG_ReplayBuffer(self.buffer_size, self.batch_size)
-
+        
+        # Score tracker and learning parameters
+        self.best_w = None
+        self.best_score = -np.inf
+        
         # Algorithm parameters
         self.gamma = 0.99  # discount factor
         self.tau = 0.01  # for soft update of target parameters
+        self.reset_episode()
         
-    def reset_episode(self):        
+    def reset_episode(self):
+        self.total_reward = 0.0
+        self.count = 0
         self.noise.reset()
         state = self.task.reset()
         self.last_state = state
         return state
 
-    def step(self, action, reward, next_state, done):        
-         # Save experience / reward            
+    def step(self, action, reward, next_state, done):
+        # Save experience / reward
+        self.total_reward += reward
+        self.count += 1           
         self.memory.add(self.last_state, action, reward, next_state, done)
 
         # Learn, if enough samples are available in memory
-        if len(self.memory.memory) > self.batch_size:
-            experiences = self.memory.sample()
+        if len(self.memory) > self.batch_size:
+            experiences = self.memory.sample(self.batch_size)
             self.learn(experiences)
 
         # Roll over last state and action
         self.last_state = next_state
 
     def act(self, state):
-        """Returns actions for given state(s) as per current policy."""
-        #print('hi')
-        #print('s',state)
-        #print('ss',self.state_size)
+        """Returns actions for given state(s) as per current policy."""        
         state = np.reshape(state, [-1, self.state_size])
-        #print('hi2')
         action = self.actor_local.model.predict(state)[0]
         return list(action + self.noise.sample())  # add some noise for exploration
     
     def learn(self, experiences):
         """Update best reward, policy, and value parameters using given batch of experience tuples."""
+        self.score = self.total_reward / float(self.count) if self.count else 0.0
+        if self.score > self.best_score:
+            self.best_score = self.score
+            if self.dynamic_noise:
+                self.noise.sigma = max(0.5 * self.noise.sigma, 0.01)
+        else:
+            if self.dynamic_noise:
+                self.noise.sigma = min(2.0 * self.noise.sigma, 10)
+        
+        
         # Convert experience tuples to separate arrays for each element (states, actions, rewards, etc.)
         #print(experiences)
         states = np.vstack([e.state for e in experiences if e is not None])
@@ -88,7 +103,7 @@ class DDPG_Agent():
         Q_targets_next = self.critic_target.model.predict_on_batch([next_states, actions_next])
 
         # Compute Q targets for current states and train critic model (local)
-        Q_targets = rewards + self.gamma * Q_targets_next #* (1 - dones)
+        Q_targets = rewards + self.gamma * Q_targets_next * (1 - dones)
         self.critic_local.model.train_on_batch(x=[states, actions], y=Q_targets)
 
         # Train actor model (local)
@@ -97,8 +112,8 @@ class DDPG_Agent():
 
         # Soft-update target models
         self.soft_update(self.critic_local.model, self.critic_target.model)
-        self.soft_update(self.actor_local.model, self.actor_target.model)   
-
+        self.soft_update(self.actor_local.model, self.actor_target.model)
+        
     def soft_update(self, local_model, target_model):
         """Soft update model parameters."""
         local_weights = np.array(local_model.get_weights())
@@ -275,21 +290,7 @@ class DDPG_ReplayBuffer:
 
     def sample(self, batch_size=64):
         """Randomly sample a batch of experiences from memory."""
-        rewards = [e.reward for e in self.memory if e is not None]
-        min_r = min(rewards)
-        norm_r = rewards - min_r
-        prob=norm_r/sum(norm_r)
-        #print(prob)
-        #print(type(self.memory))
-        indexes = range(len(self.memory))
-        #print(indexes)
-        picks = np.random.choice(indexes, batch_size, p=prob)
-        #print(picks)
-        results=[]
-        for i in indexes:
-            results.append(self.memory[i])
-        #print(results)
-        return results
+        return random.sample(self.memory, k=batch_size)
 
     def __len__(self):
         """Return the current size of internal memory."""
