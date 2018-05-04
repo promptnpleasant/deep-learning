@@ -44,6 +44,8 @@ class DDPG_Agent():
         self.best_score = -np.inf
         
         # Algorithm parameters
+        self.force_learn_most_recent=False
+        self.on_policy=True
         self.gamma = 0.99  # discount factor
         self.tau = 0.01  # for soft update of target parameters
         self.reset_episode()
@@ -62,10 +64,8 @@ class DDPG_Agent():
         self.count += 1           
         self.memory.add(self.last_state, action, reward, next_state, done)
 
-        # Learn, if enough samples are available in memory
-        if len(self.memory) > self.batch_size:
-            experiences = self.memory.sample(self.batch_size)
-            self.learn(experiences)
+        if self.on_policy:
+            self.learn()
 
         # Roll over last state and action
         self.last_state = next_state
@@ -76,8 +76,17 @@ class DDPG_Agent():
         action = self.actor_local.model.predict(state)[0]
         return list(action + self.noise.sample())  # add some noise for exploration
     
-    def learn(self, experiences):
+    def learn(self):
         """Update best reward, policy, and value parameters using given batch of experience tuples."""
+        
+        # Learn, if enough samples are available in memory
+        if len(self.memory) <= self.batch_size:
+            return
+        
+        experiences = self.memory.sample(self.batch_size)
+        if self.force_learn_most_recent:
+            experiences[0] = self.memory.memory[-1]
+        
         self.score = self.total_reward / float(self.count) if self.count else 0.0
         if self.score > self.best_score:
             self.best_score = self.score
@@ -85,7 +94,7 @@ class DDPG_Agent():
                 self.noise.sigma = max(0.5 * self.noise.sigma, 0.01)
         else:
             if self.dynamic_noise:
-                self.noise.sigma = min(2.0 * self.noise.sigma, 10)
+                self.noise.sigma = min(2.0 * self.noise.sigma, 25)
         
         
         # Convert experience tuples to separate arrays for each element (states, actions, rewards, etc.)
